@@ -1,8 +1,8 @@
 import * as dgram from "dgram";
 
-// You can use print statements as follows for debugging, they'll be visible when running tests.
-console.log("Logs from your program will appear here!");
 
+//* this is the dns header format
+// https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.1
 interface DnsHeader {
   id: number;          // 16 bits (2 bytes)
   flags: {
@@ -21,7 +21,25 @@ interface DnsHeader {
   arcount: number;  
 }
 
-//* function to parse the incomming tcp header
+//* this is the dns question format
+// https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.2
+interface DnsQuestion {
+  name : string;
+  type : number; // 16 bits: Type of query (e.g., A, AAAA, CNAME)
+  Class: number; // 16 bits: Class of query (e.g., IN for Internet)
+}
+
+//* this is the dns query format
+// https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.3
+interface DnsQuery {
+  DnsHeader: DnsHeader;
+  questions: DnsQuestion[];
+  answers: any[]; 
+  authorities: any[]; 
+  additionals: any[]; 
+}
+
+//* function to parse the incomming udp header
 const parseDnsHeader = (data: Buffer): DnsHeader => {
   const id = data.readUInt16BE(0);
   const flags = data.readUInt16BE(2);
@@ -46,13 +64,38 @@ const parseDnsHeader = (data: Buffer): DnsHeader => {
   return header;
 };
 
+const parseDnsQuestion = (data : Buffer) : {question : DnsQuestion , offset : number} => {
+  let offset:number = 12;
+  let i = offset;
+  let name = "";
+  while (i < data.length && data[i] !== 0 ){
+    if (data[i] == 0x0 ) {
+      break;
+    }
+    let labelLength = data[i];
+    if (name.length > 0 ) {
+      name += '.';
+    }
+    name += data.toString('ascii', i+1 , i+1+labelLength);
+    i += labelLength+1
+  }
+  offset = i+1;
+  const type = data.readUInt16BE(offset);
+  const Class = data.readUInt16BE(offset+2);
+  const question : DnsQuestion  = {
+    name : name,
+    type : type,
+    Class : Class
+  }
+  return {question , offset};
+};
+
 const createDnsResponse = (query:Buffer) : Buffer => {
   const header = parseDnsHeader(query);
+  const {question, offset} = parseDnsQuestion(query);
 
   const response = Buffer.alloc(512);
-  query.copy(response); // Copy the original query
-  
-  // Modify the header fields for the response
+  query.copy(response); 
   let flags = 0;
   flags |= 0x8000;                    // Set QR bit to 1 (Response)
   flags |= (header.flags.opcode << 11);  // Preserve the opcode
@@ -60,12 +103,13 @@ const createDnsResponse = (query:Buffer) : Buffer => {
   response.writeUInt16BE(header.id, 0); 
   response.writeUInt16BE(flags, 2);      
   
-  // // Set counts
-  // response.writeUInt16BE(header.qdcount, 4);
-  // response.writeUInt16BE(1, 6);          
-  // response.writeUInt16BE(0, 8);            
-  // response.writeUInt16BE(0, 10);            
-  
+  // Set counts
+  response.writeUInt16BE(header.qdcount, 4);
+  response.writeUInt16BE(1, 6);          
+  response.writeUInt16BE(0, 8);            
+  response.writeUInt16BE(0, 10);            
+  response.writeUInt32BE(0x3C, offset);
+  response.writeUInt16BE(0x4, offset); // Pointer to the question name
   return response;
 }
 
