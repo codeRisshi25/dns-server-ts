@@ -1,19 +1,28 @@
-
 services:
   dns-server:
     build: .
     container_name: dns-server 
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      NODE_ENV: production
+      REDIS_URL: redis://redis:6379  
     ports:
       - "8053:8053/udp"
+      - "8053:8053/tcp"
     networks:
       - dns-net
     restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "nc -u -z localhost 8053 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   redis:
     image: redis:7-alpine
@@ -23,13 +32,22 @@ services:
     networks:
       - dns-net
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
-      - redis-data:/data  # Persist Redis data
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
 networks:
   dns-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
 
 volumes:
   redis-data:
