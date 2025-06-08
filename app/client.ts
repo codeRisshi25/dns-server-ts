@@ -1,10 +1,12 @@
 import dgram from "dgram";
 
 class SimpleDnsClient {
-  private client: dgram.Socket;
+  private client: dgram.Socket | null = null;
+  private isActive = false;
 
   constructor() {
     this.client = dgram.createSocket("udp4");
+    this.isActive = true;
   }
 
   // Create a DNS query packet
@@ -66,64 +68,96 @@ class SimpleDnsClient {
     }
   }
 
+  private closeClient() {
+    if (this.client && this.isActive) {
+      this.isActive = false;
+      this.client.close();
+      this.client = null;
+    }
+  }
+
   async queryDns(domain: string, serverPort: number = 8053): Promise<void> {
-    const queryId = Math.floor(Math.random() * 65535);
-    const query = this.createDnsQuery(domain, queryId);
-    
-    console.log(`🔍 Querying ${domain} (ID: ${queryId}) from DNS server on port ${serverPort}...`);
-    console.log(`📤 Query size: ${query.length} bytes`);
+    return new Promise((resolve) => {
+      if (!this.client || !this.isActive) {
+        console.error("❌ Client not available");
+        resolve();
+        return;
+      }
 
-    this.client.on("message", (response, remote) => {
-      const responseId = response.readUInt16BE(0);
-      const flags = response.readUInt16BE(2);
-      const isResponse = (flags & 0x8000) !== 0;
-      const rcode = flags & 0x000F;
+      const queryId = Math.floor(Math.random() * 65535);
+      const query = this.createDnsQuery(domain, queryId);
       
-      console.log(`\n📥 Received response from ${remote.address}:${remote.port}`);
-      console.log(`📋 Response ID: ${responseId} (Expected: ${queryId})`);
-      console.log(`✅ Is Response: ${isResponse}`);
-      console.log(`📊 Response Code: ${rcode} (0=No Error)`);
-      console.log(`📦 Response size: ${response.length} bytes`);
-      
-      if (responseId === queryId && rcode === 0) {
-        const ip = this.parseResponse(response);
-        if (ip) {
-          console.log(`🎯 Resolved: ${domain} -> ${ip}`);
+      console.log(`🔍 Querying ${domain} (ID: ${queryId}) from DNS server on port ${serverPort}...`);
+      console.log(`📤 Query size: ${query.length} bytes`);
+
+      let responseReceived = false;
+
+      this.client.on("message", (response, remote) => {
+        if (responseReceived) return;
+        responseReceived = true;
+
+        const responseId = response.readUInt16BE(0);
+        const flags = response.readUInt16BE(2);
+        const isResponse = (flags & 0x8000) !== 0;
+        const rcode = flags & 0x000F;
+        
+        console.log(`\n📥 Received response from ${remote.address}:${remote.port}`);
+        console.log(`📋 Response ID: ${responseId} (Expected: ${queryId})`);
+        console.log(`✅ Is Response: ${isResponse}`);
+        console.log(`📊 Response Code: ${rcode} (0=No Error)`);
+        console.log(`📦 Response size: ${response.length} bytes`);
+        
+        if (responseId === queryId && rcode === 0) {
+          const ip = this.parseResponse(response);
+          if (ip) {
+            console.log(`🎯 Resolved: ${domain} -> ${ip}`);
+          } else {
+            console.log(`❌ No IP found in response`);
+          }
         } else {
-          console.log(`❌ No IP found in response`);
+          console.log(`❌ Invalid response or error code`);
         }
-      } else {
-        console.log(`❌ Invalid response or error code`);
-      }
-      
-      this.client.close();
-    });
+        
+        this.closeClient();
+        resolve();
+      });
 
-    this.client.on("error", (err) => {
-      console.error(`❌ Client error: ${err.message}`);
-      this.client.close();
-    });
+      this.client.on("error", (err) => {
+        if (responseReceived) return;
+        responseReceived = true;
+        console.error(`❌ Client error: ${err.message}`);
+        this.closeClient();
+        resolve();
+      });
 
-    // Set timeout
-    setTimeout(() => {
-      console.log("⏰ Query timeout - no response received");
-      this.client.close();
-    }, 10000);
+      // Set timeout
+      const timeoutHandle = setTimeout(() => {
+        if (!responseReceived) {
+          responseReceived = true;
+          console.log("⏰ Query timeout - no response received");
+          this.closeClient();
+          resolve();
+        }
+      }, 8000);
 
-    // Send the query
-    this.client.send(query, serverPort, "127.0.0.1", (err) => {
-      if (err) {
-        console.error(`❌ Failed to send query: ${err.message}`);
-        this.client.close();
-      }
+      // Send the query
+      this.client.send(query, serverPort, "127.0.0.1", (err) => {
+        if (err) {
+          if (!responseReceived) {
+            responseReceived = true;
+            console.error(`❌ Failed to send query: ${err.message}`);
+            clearTimeout(timeoutHandle);
+            this.closeClient();
+            resolve();
+          }
+        }
+      });
     });
   }
 }
 
 // Test the DNS client
 async function testDnsForwarding() {
-  const client = new SimpleDnsClient();
-  
   console.log("🧪 Testing DNS Forwarding Server...\n");
   
   // Test multiple domains
@@ -131,13 +165,10 @@ async function testDnsForwarding() {
   
   for (const domain of testDomains) {
     console.log(`\n${"=".repeat(50)}`);
-    await new Promise(resolve => {
-      setTimeout(async () => {
-        const testClient = new SimpleDnsClient();
-        await testClient.queryDns(domain);
-        resolve(void 0);
-      }, 2000);
-    });
+    const testClient = new SimpleDnsClient();
+    await testClient.queryDns(domain);
+    // Add small delay between requests
+    await new Promise(resolve => setTimeout(resolve, 1000));
   }
 }
 
