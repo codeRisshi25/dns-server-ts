@@ -1,0 +1,36 @@
+
+services:
+  dns-server:
+    build: .
+    container_name: dns-server 
+    depends_on:
+      - redis
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      NODE_ENV: production
+    ports:
+      - "8053:8053/udp"
+    networks:
+      - dns-net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: dns-redis 
+    ports:
+      - "6379:6379"
+    networks:
+      - dns-net
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data  # Persist Redis data
+
+networks:
+  dns-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local
