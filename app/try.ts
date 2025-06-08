@@ -53,7 +53,10 @@ const dnsForwardUpstream = (
   const upstreamQueryId = Math.floor(Math.random()*6555);
   clientInfo.upstreamQueryId = upstreamQueryId;
 
-
+  // change the actual query for upstream responses\
+  const upstreamQuery = Buffer.from(queryBuffer);
+  upstreamQuery.writeUInt16BE(upstreamQueryId,0);
+  
   const requestKey = `${clientInfo.clientIP}:${clientInfo.clientPort}:${clientInfo.queryId}:${Date.now()}`;
   const requestid = crypto
     .createHash("sha256")
@@ -93,7 +96,7 @@ const dnsForwardUpstream = (
   }, 5000);
 
   //* Create a udp socket to forward the query upstream
-  upstreamSocket.send(queryBuffer, server.port, server.ip, (err) => {
+  upstreamSocket.send(upstreamQuery, server.port, server.ip, (err) => {
     if (err) {
       console.error(`Failed to contact ${server.name} (${server.ip}):`, err);
       upstreamSocket.close();
@@ -120,7 +123,8 @@ dnsServer.on("message", (queryBuffer: Buffer, remoteAddr: dgram.RemoteInfo) => {
         clientIP: remoteAddr.address,
         clientPort : remoteAddr.port,
         timestamp : Date.now(),
-        queryId : queryId
+        queryId : queryId,
+        upstreamQueryId : 0
     }
     dnsForwardUpstream(queryBuffer, clientInfo, currentServerIndex);
   } catch (error) {
